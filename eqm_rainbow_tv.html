@@ -42,11 +42,29 @@ body{background:#0d0d0d;color:#ccc;font-family:'Inter',sans-serif;overflow:hidde
 #btn-export{background:#111;border:1px solid #333;color:#778;padding:3px 9px;font-size:10px;cursor:pointer;border-radius:3px;font-family:inherit;transition:all .15s}
 #btn-export:hover{background:#1a1a2a;color:#aaf}
 @media(max-width:700px){
-  #header{flex-direction:column;align-items:flex-start;gap:6px}
-  #btns{flex-wrap:wrap}
+  body{overflow:auto}
+  #wrapper{height:auto;min-height:100vh}
+  #header{flex-direction:column;align-items:flex-start;gap:4px;padding:6px 10px}
+  #header h1{font-size:11px;line-height:1.3}
+  #header .sub{display:none}
+  #btns{flex-wrap:wrap;gap:3px}
+  #btns button{padding:4px 8px;font-size:9px}
+  #btn-export{padding:4px 8px;font-size:9px}
+  #chart-wrap{height:60vh;min-height:320px}
   #legend{display:none}
-  #gauge-wrap{width:160px}
-  #stats{font-size:9px}
+  #gauge-wrap{display:none}
+  #cycle-info{display:none!important}
+  #stats{
+    top:6px;left:6px;
+    padding:7px 10px;
+    font-size:9px;
+    line-height:1.7;
+    min-width:0;
+    max-width:160px;
+    background:rgba(10,10,10,.85)
+  }
+  #stats .sv-large{font-size:13px}
+  #stats .sr{gap:8px}
 }
 </style>
 </head>
