@@ -30,6 +30,6 @@ jobs:
         run: |
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-          git add eqm_rainbow_tv.html btc_prices.csv
+          git add eqm_rainbow_tv.html eqm_rainbow_mobile.html btc_prices.csv
           git diff --staged --quiet || git commit -m "Auto-update chart $(date -u +%Y-%m-%d)"
           git push
