@@ -1,0 +1,12 @@
+__pycache__/
+*csv
+!btc_prices.csv
+eqm_bands.csv
+eqm_rainbow.html
+eqm_rainbow.png
+eqm_rainbow_backup.png
+eqm_rainbow_plotly_backup.html
+eqm_rainbow_tv.backup2.html
+eqm_model_backup.py
+eqm_stats.txt
+model_params.json
