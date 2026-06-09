@@ -920,101 +920,186 @@ const RESID_SORTED = [...RESIDUALS].sort((a,b)=>a-b);
 const GENESIS_TS = 1230940800;
 let CURRENT_PRICE = {cur_price}, CURRENT_EQM50 = {cur_eqm50}, CURRENT_RISK = {cur_risk};
 
-// ── Chart ─────────────────────────────────────────────────────────────────────
-const ALL_TIMES = PRICE_DATA.map(d => d.time);
-const chart = LightweightCharts.createChart(document.getElementById('tv-chart'), {{
-  layout: {{ background: {{ color: 'transparent' }}, textColor: '#888' }},
-  grid:   {{ vertLines: {{ color: '#1a1a1a' }}, horzLines: {{ color: '#1a1a1a' }} }},
-  rightPriceScale: {{ borderColor: '#2a2a2a', scaleMargins: {{ top: 0.05, bottom: 0.05 }} }},
-  timeScale: {{ borderColor: '#2a2a2a', timeVisible: false }},
-  crosshair: {{ mode: LightweightCharts.CrosshairMode.Magnet }},
-  handleScale: true, handleScroll: true,
-}});
-const priceSeries = chart.addLineSeries({{ color:'#ffffff', lineWidth:1.5, priceScaleId:'right', lastValueVisible:true, priceLineVisible:false }});
-priceSeries.setData(PRICE_DATA);
-const olsSeries = chart.addLineSeries({{ color:'#aa66ff', lineWidth:1, lineStyle:1, priceScaleId:'right', lastValueVisible:false, priceLineVisible:false, crosshairMarkerVisible:false }});
-olsSeries.setData(OLS_DATA);
-chart.priceScale('right').applyOptions({{ mode:1 }});
-
-// ── Fill canvas ───────────────────────────────────────────────────────────────
+// ── Canvas + Chart setup ──────────────────────────────────────────────────────
 const canvas = document.getElementById('fill-canvas');
 const ctx    = canvas.getContext('2d');
-const BAND_COLORS = ['#1a237e','#1565c0','#039be5','#00acc1','#43a047','#c0ca33','#ffb300','#ff6d00','#bf360c','#dd0000','#770000'];
-const QNAMES = ['EQM_1','EQM_10','EQM_20','EQM_30','EQM_40','EQM_50','EQM_60','EQM_70','EQM_80','EQM_90','EQM_99'];
+const wrap   = document.getElementById('chart-wrap');
+const chartEl = document.getElementById('tv-chart');
 
+const QNAMES      = ["EQM_1","EQM_10","EQM_20","EQM_30","EQM_40","EQM_50","EQM_60","EQM_70","EQM_80","EQM_90","EQM_99"];
+const RAIL_NAMES  = ["EQM_0_1","EQM_99_9"];
+const COLORS      = ["#1f2878","#2065b4","#1195d6","#0ca2b4","#489a4c","#b7c03c","#edac11","#ed6f11","#b33c17","#cd0f0f","#6f0707"];
+const RAIL_COLORS = ["#888899","#bb1100"];
+
+const chart = LightweightCharts.createChart(chartEl, {{
+  width:  wrap.offsetWidth,
+  height: wrap.offsetHeight,
+  layout: {{
+    background: {{ type: LightweightCharts.ColorType.Solid, color: 'transparent' }},
+    textColor: '#666',
+  }},
+  rightPriceScale: {{
+    mode: LightweightCharts.PriceScaleMode.Logarithmic,
+    borderColor: '#2a2a2a',
+    scaleMargins: {{ top: 0.04, bottom: 0.04 }},
+  }},
+  leftPriceScale: {{ visible: false }},
+  timeScale: {{ borderColor: '#2a2a2a', timeVisible: true, secondsVisible: false }},
+  grid: {{
+    vertLines: {{ visible: false }},
+    horzLines: {{ visible: false }},
+  }},
+  crosshair: {{
+    mode: LightweightCharts.CrosshairMode.Normal,
+    vertLine: {{ color: '#444', labelBackgroundColor: '#2a2a2a', width: 1 }},
+    horzLine: {{ color: '#444', labelBackgroundColor: '#2a2a2a', width: 1 }},
+  }},
+}});
+
+// Band series (TV lines, drawn on top of canvas fills)
+const bandSeries = {{}};
+for (let i = 0; i < QNAMES.length; i++) {{
+  const name = QNAMES[i];
+  const s = chart.addLineSeries({{
+    color: COLORS[i],
+    lineWidth: name === 'EQM_50' ? 2 : 1,
+    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+  }});
+  s.setData(BAND_DATA[name]);
+  bandSeries[name] = s;
+}}
+for (let i = 0; i < RAIL_NAMES.length; i++) {{
+  const name = RAIL_NAMES[i];
+  const s = chart.addLineSeries({{
+    color: RAIL_COLORS[i], lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+  }});
+  s.setData(BAND_DATA[name]);
+  bandSeries[name] = s;
+}}
+
+// OLS reference
+const olsSeries = chart.addLineSeries({{
+  color: '#9955ee', lineWidth: 1,
+  lineStyle: LightweightCharts.LineStyle.Dashed,
+  priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+}});
+olsSeries.setData(OLS_DATA);
+
+// Price line (topmost)
+const priceSeries = chart.addLineSeries({{
+  color: '#ffffff', lineWidth: 2.5,
+  priceLineVisible: false, lastValueVisible: true,
+  crosshairMarkerVisible: true, crosshairMarkerRadius: 5,
+  crosshairMarkerBorderColor: '#fff', crosshairMarkerBackgroundColor: '#111',
+}});
+priceSeries.setData(PRICE_DATA);
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function hexToRgba(hex, a) {{
+  const r=parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16);
+  return `rgba(${{r}},${{g}},${{b}},${{a}})`;
+}}
+
+// Pre-build time→value lookup per band
+const lookup = {{}};
+for (const name of [...QNAMES, ...RAIL_NAMES]) {{
+  lookup[name] = {{}};
+  for (const pt of BAND_DATA[name]) lookup[name][pt.time] = pt.value;
+}}
+const ALL_TIMES = BAND_DATA[RAIL_NAMES[0]].map(p => p.time);
+
+const FILL_PAIRS = [
+  [RAIL_NAMES[0], QNAMES[0],             COLORS[0]],
+  ...QNAMES.slice(0,-1).map((lo,i)=>[lo, QNAMES[i+1], COLORS[i]]),
+  [QNAMES[QNAMES.length-1], RAIL_NAMES[1], COLORS[COLORS.length-1]],
+];
+
+const HALVING_TS  = [1354060800, 1468022400, 1589155200, 1713571200, 1839542400, 1965945600];
+const HALVING_LBL = ["Halving 1  Nov '12", "Halving 2  Jul '16", "Halving 3  May '20", "Halving 4  Apr '24", "Halving 5  ~Apr '28", "Halving 6  ~Apr '32"];
+
+// ── Draw fills on canvas ──────────────────────────────────────────────────────
 function drawFills() {{
-  const wrap = document.getElementById('chart-wrap');
-  const W = wrap.clientWidth, H = wrap.clientHeight;
+  const w = wrap.offsetWidth, h = wrap.offsetHeight;
   const dpr = window.devicePixelRatio || 1;
-  if (canvas.width !== W * dpr) {{
-    canvas.width  = W * dpr; canvas.height = H * dpr;
-    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
-    ctx.scale(dpr, dpr);
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const _lastT = ALL_TIMES[ALL_TIMES.length - 1];
+  const _refT  = ALL_TIMES[Math.max(0, ALL_TIMES.length - 91)];
+  const _x1    = chart.timeScale().timeToCoordinate(_lastT);
+  const _x0    = chart.timeScale().timeToCoordinate(_refT);
+  const _msDay = 86400000;
+  const _pxDay = (_x1 != null && _x0 != null && _x1 !== _x0)
+    ? (_x1 - _x0) / ((new Date(_lastT) - new Date(_refT)) / _msDay) : null;
+  function tsToX(ts) {{
+    const x = chart.timeScale().timeToCoordinate(ts);
+    if (x != null) return x;
+    if (_pxDay == null || _x1 == null) return null;
+    return _x1 + (ts - new Date(_lastT).getTime()/1000) / 86400 * _pxDay;
   }}
-  ctx.clearRect(0, 0, W, H);
 
-  const ts   = chart.timeScale();
-  const lastT = ALL_TIMES[ALL_TIMES.length - 1];
-  const refT  = ALL_TIMES[Math.max(0, ALL_TIMES.length - 91)];
-  const x1 = ts.timeToCoordinate(lastT);
-  const x0 = ts.timeToCoordinate(refT);
-  const msDay = 86400000;
-  const pxDay = (x1 != null && x0 != null && x1 !== x0)
-    ? (x1 - x0) / ((new Date(lastT) - new Date(refT)) / msDay) : null;
+  const visRange = chart.timeScale().getVisibleRange();
+  if (!visRange) return;
+  const tFrom = visRange.from, tTo = visRange.to;
+  const visible = ALL_TIMES.filter(t => t >= tFrom && t <= tTo);
+  if (visible.length < 2) return;
 
-  for (let bi = 0; bi < QNAMES.length - 1; bi++) {{
-    const loArr = BAND_DATA[QNAMES[bi]];
-    const hiArr = BAND_DATA[QNAMES[bi + 1]];
-    if (!loArr || !hiArr) continue;
-    const lo = [], hi = [];
-    for (let i = 0; i < loArr.length; i++) {{
-      const x = ts.timeToCoordinate(loArr[i].time); if (x == null) continue;
-      const yLo = priceSeries.priceToCoordinate(loArr[i].value);
-      const yHi = priceSeries.priceToCoordinate(hiArr[i] ? hiArr[i].value : loArr[i].value);
-      if (yLo == null || yHi == null) continue;
-      lo.push({{x, y:yLo}}); hi.push({{x, y:yHi}});
+  const step = Math.max(1, Math.floor(visible.length / 500));
+
+  for (const [loName, hiName, hexColor] of FILL_PAIRS) {{
+    const loLookup = lookup[loName], hiLookup = lookup[hiName];
+    const loSeries = bandSeries[loName], hiSeries = bandSeries[hiName];
+    const hiPts = [], loPts = [];
+    for (let i = 0; i < visible.length; i += step) {{
+      const t = visible[i];
+      const loV = loLookup[t], hiV = hiLookup[t];
+      if (loV == null || hiV == null) continue;
+      const x  = chart.timeScale().timeToCoordinate(t);
+      const yH = hiSeries.priceToCoordinate(hiV);
+      const yL = loSeries.priceToCoordinate(loV);
+      if (x == null || yH == null || yL == null) continue;
+      hiPts.push([x, yH]);
+      loPts.push([x, yL]);
     }}
-    if (lo.length < 2) continue;
+    if (hiPts.length < 2) continue;
     ctx.beginPath();
-    ctx.moveTo(hi[0].x, hi[0].y);
-    for (let i = 1; i < hi.length; i++) ctx.lineTo(hi[i].x, hi[i].y);
-    for (let i = lo.length - 1; i >= 0; i--) ctx.lineTo(lo[i].x, lo[i].y);
+    ctx.moveTo(hiPts[0][0], hiPts[0][1]);
+    for (let j = 1; j < hiPts.length; j++) ctx.lineTo(hiPts[j][0], hiPts[j][1]);
+    for (let j = loPts.length-1; j >= 0; j--) ctx.lineTo(loPts[j][0], loPts[j][1]);
     ctx.closePath();
-    ctx.fillStyle = BAND_COLORS[bi] + '38'; ctx.fill();
-  }}
-  for (let bi = 0; bi < QNAMES.length; bi++) {{
-    const arr = BAND_DATA[QNAMES[bi]]; if (!arr) continue;
-    const pts = [];
-    for (const d of arr) {{
-      const x = ts.timeToCoordinate(d.time); if (x == null) continue;
-      const y = priceSeries.priceToCoordinate(d.value); if (y == null) continue;
-      pts.push({{x, y}});
-    }}
-    if (pts.length < 2) continue;
-    ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    ctx.strokeStyle = BAND_COLORS[bi]; ctx.lineWidth = QNAMES[bi]==='EQM_50'?2:1; ctx.stroke();
+    ctx.fillStyle = hexToRgba(hexColor, 0.70);
+    ctx.fill();
   }}
 
   // Halving lines
-  const HTS = [1354060800,1468252800,1587081600,1713139200,1839283200];
-  const HC  = ['#ff660055','#ffcc0055','#00ccff55','#cc44ff55','#44ff8855'];
-  for (let i = 0; i < HTS.length; i++) {{
-    let hx = ts.timeToCoordinate(HTS[i]);
-    if (hx == null && pxDay != null && x1 != null) {{
-      hx = x1 + (HTS[i] - new Date(lastT).getTime()/1000) / 86400 * pxDay;
-    }}
-    if (hx == null || hx < 0 || hx > W) continue;
-    ctx.beginPath(); ctx.moveTo(hx,0); ctx.lineTo(hx,H);
-    ctx.strokeStyle = HC[i]; ctx.lineWidth = 1; ctx.setLineDash([4,4]); ctx.stroke(); ctx.setLineDash([]);
-    ctx.fillStyle = HC[i]; ctx.font = '9px -apple-system'; ctx.textAlign = 'center';
-    ctx.fillText('½'+(i+1), hx, 13);
+  ctx.setLineDash([]);
+  for (let i = 0; i < HALVING_TS.length; i++) {{
+    const x = tsToX(HALVING_TS[i]);
+    if (x == null || x < 0 || x > w) continue;
+    const isEst = (i >= 4);
+    ctx.beginPath();
+    ctx.moveTo(x, 0); ctx.lineTo(x, h);
+    ctx.setLineDash(isEst ? [6, 4] : []);
+    ctx.strokeStyle = isEst ? 'rgba(255,210,0,0.28)' : 'rgba(255,210,0,0.50)';
+    ctx.lineWidth = isEst ? 1.5 : 2;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = 'bold 10px -apple-system,sans-serif';
+    ctx.lineWidth = 3; ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.strokeText(HALVING_LBL[i], x + 4, 17);
+    ctx.fillStyle = isEst ? 'rgba(255,215,0,0.55)' : 'rgba(255,215,0,0.95)';
+    ctx.fillText(HALVING_LBL[i], x + 4, 17);
   }}
 }}
 
 let _raf = null;
 function schedDraw() {{ if(_raf) return; _raf = requestAnimationFrame(()=>{{_raf=null;drawFills();}}); }}
-new ResizeObserver(schedDraw).observe(document.getElementById('chart-wrap'));
+new ResizeObserver(schedDraw).observe(wrap);
 chart.timeScale().subscribeVisibleLogicalRangeChange(schedDraw);
 
 // ── Live price ────────────────────────────────────────────────────────────────
