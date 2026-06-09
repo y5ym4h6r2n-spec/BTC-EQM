@@ -1095,6 +1095,26 @@ function drawFills() {{
     ctx.fillStyle = isEst ? 'rgba(255,215,0,0.55)' : 'rgba(255,215,0,0.95)';
     ctx.fillText(HALVING_LBL[i], x + 4, 17);
   }}
+
+  // Black outline under the white TV price line
+  const pricePts = [];
+  for (const d of PRICE_DATA) {{
+    if (d.time < tFrom || d.time > tTo) continue;
+    const x = chart.timeScale().timeToCoordinate(d.time);
+    const y = priceSeries.priceToCoordinate(d.value);
+    if (x == null || y == null) continue;
+    pricePts.push([x, y]);
+  }}
+  if (pricePts.length >= 2) {{
+    ctx.beginPath();
+    ctx.moveTo(pricePts[0][0], pricePts[0][1]);
+    for (let i = 1; i < pricePts.length; i++) ctx.lineTo(pricePts[i][0], pricePts[i][1]);
+    ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+    ctx.lineWidth = 6;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  }}
 }}
 
 let _raf = null;
