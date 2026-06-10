@@ -726,8 +726,8 @@ def generate_tv_html(df, hist_bands, current_c, tv_path):
     html = _replace_js_var(html, 'OLS_DATA', _json.dumps(ols_data))
 
     # ── OLS_A, OLS_B (EQM walk-forward params for live risk gauge) ────────────
-    html = _replace_js_var(html, 'OLS_A', repr(round(current_c['a'], 8)))
-    html = _replace_js_var(html, 'OLS_B', repr(round(current_c['b'], 8)))
+    html = _replace_js_var(html, 'OLS_A', repr(round(float(current_c['a']), 8)))
+    html = _replace_js_var(html, 'OLS_B', repr(round(float(current_c['b']), 8)))
 
     # ── RESIDUALS (rolling window — for live risk computation) ────────────────
     sub  = df[df['date'] >= OLS_START].reset_index(drop=True)
