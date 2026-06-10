@@ -283,7 +283,10 @@ function fetchPrice(){
       CURRENT_PRICE=p; CURRENT_EQM50=computeEQM50();
       document.getElementById('s-price').textContent=fmtP(p);
       document.getElementById('s-eqm50').textContent=fmtP(CURRENT_EQM50);
+      // Push today's live price into the chart series so the label stays current
       const now=new Date();
+      const todayStr=now.toISOString().slice(0,10);
+      priceSeries.update({time:todayStr, value:p});
       document.getElementById('hdr-upd').textContent=
         now.toLocaleDateString('en-GB',{day:'numeric',month:'short'})+' · '+
         now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
