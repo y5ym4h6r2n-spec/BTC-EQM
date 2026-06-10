@@ -131,7 +131,7 @@ def fetch_latest_prices(df):
 
     days_needed = (today_utc - last_date).days + 2
     limit = min(1000, days_needed)
-    url = (f"https://api.binance.com/api/v3/klines"
+    url = (f"https://data-api.binance.vision/api/v3/klines"
            f"?symbol=BTCUSDT&interval=1d&limit={limit}")
     print(f"  Fetching up to {limit} days of prices from Binance...")
 
@@ -1134,6 +1134,16 @@ function fetchPrice() {{
     .then(r=>r.json()).then(d=>{{
       const p = Math.round(parseFloat(d.price)); if (!p) return;
       CURRENT_PRICE = p; CURRENT_EQM50 = computeEQM50();
+      // Extend the price line + its black outline to the live price so the chart label matches the Price stat
+      const _now = new Date();
+      const todayStr = _now.getUTCFullYear() + '-' +
+        String(_now.getUTCMonth()+1).padStart(2,'0') + '-' +
+        String(_now.getUTCDate()).padStart(2,'0');
+      priceSeries.update({{time: todayStr, value: p}});
+      const _last = PRICE_DATA[PRICE_DATA.length-1];
+      if (_last && _last.time === todayStr) {{ _last.value = p; }}
+      else {{ PRICE_DATA.push({{time: todayStr, value: p}}); }}
+      schedDraw();
       document.getElementById('s-price').textContent = fmtP(p);
       document.getElementById('s-eqm50').textContent = fmtP(CURRENT_EQM50);
       const now = new Date();
