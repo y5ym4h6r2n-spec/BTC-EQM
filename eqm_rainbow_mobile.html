@@ -166,7 +166,11 @@ olsSeries.setData(OLS_DATA);
 
 const priceSeries = chart.addLineSeries({
   color: '#ffffff', lineWidth: 2.5,
-  priceLineVisible: false, lastValueVisible: true,
+  priceLineVisible: true,
+  priceLineWidth: 1,
+  priceLineColor: 'rgba(255,255,255,0.4)',
+  priceLineStyle: LightweightCharts.LineStyle.Dashed,
+  lastValueVisible: true,
   crosshairMarkerVisible: true, crosshairMarkerRadius: 5,
   crosshairMarkerBorderColor: '#fff', crosshairMarkerBackgroundColor: '#111',
 });
