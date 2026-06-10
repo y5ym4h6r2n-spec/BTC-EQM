@@ -316,6 +316,16 @@ function fetchPrice() {
     .then(r=>r.json()).then(d=>{
       const p = Math.round(parseFloat(d.price)); if (!p) return;
       CURRENT_PRICE = p; CURRENT_EQM50 = computeEQM50();
+      // Extend the price line + its black outline to the live price so the chart label matches the Price stat
+      const _now = new Date();
+      const todayStr = _now.getUTCFullYear() + '-' +
+        String(_now.getUTCMonth()+1).padStart(2,'0') + '-' +
+        String(_now.getUTCDate()).padStart(2,'0');
+      priceSeries.update({time: todayStr, value: p});
+      const _last = PRICE_DATA[PRICE_DATA.length-1];
+      if (_last && _last.time === todayStr) { _last.value = p; }
+      else { PRICE_DATA.push({time: todayStr, value: p}); }
+      schedDraw();
       document.getElementById('s-price').textContent = fmtP(p);
       document.getElementById('s-eqm50').textContent = fmtP(CURRENT_EQM50);
       const now = new Date();
