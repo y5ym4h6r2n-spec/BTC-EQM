@@ -732,6 +732,9 @@ chart.timeScale().subscribeVisibleTimeRangeChange(scheduleDraw);
 chart.timeScale().fitContent();
 updateGauge(CURRENT_RISK);
 updateBandHighlight(CURRENT_RISK);
+// Show last-close values immediately so the stat panel matches the price line before the live fetch resolves
+document.getElementById('s-price').textContent  = '$' + CURRENT_PRICE.toLocaleString('en-US');
+document.getElementById('s-eqm50').textContent  = '$' + CURRENT_EQM50.toLocaleString('en-US');
 requestAnimationFrame(()=>{ drawFills(); positionLegend(); });
 setTimeout(()=>{ drawFills(); positionLegend(); }, 150);
 setTimeout(()=>{ drawFills(); positionLegend(); }, 500);

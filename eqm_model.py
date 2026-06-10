@@ -659,8 +659,10 @@ def _replace_js_var(html, var_name, new_json):
     close_chars = {']', '}'}
     first = html[val_start]
     if first not in open_chars:
-        # scalar — find next semicolon
+        # scalar — find next semicolon (consume any accumulated ones)
         end = html.index(';', val_start)
+        while end < len(html) and html[end] == ';':
+            end += 1
     else:
         depth, pos = 0, val_start
         in_str, esc = False, False
@@ -681,8 +683,8 @@ def _replace_js_var(html, var_name, new_json):
                         break
             pos += 1
         end = pos + 1  # one past closing bracket
-        # skip optional trailing semicolon
-        if end < len(html) and html[end] == ';':
+        # skip optional trailing semicolon(s)
+        while end < len(html) and html[end] == ';':
             end += 1
     return html[:m.start()] + f'{keyword} {var_name} = {new_json};' + html[end:]
 
