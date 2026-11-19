@@ -747,6 +747,7 @@ def generate_mobile_html(df, hist_bands, current_c, mobile_path):
     cur_eqm50 = round(float(current_c['current_bands']['EQM_50']))
     cur_risk  = round(current_c['risk_pct'], 1)
     cur_band  = band_label(cur_risk)
+    live_labels = _json.dumps(list(BAND_LABELS))
     ath_price = int(round(current_c['ath_price']))
     drawdown  = round(current_c['drawdown_pct'], 1)
     ols_a     = round(current_c['a'], 8)
@@ -1086,6 +1087,9 @@ function computeEQM50() {{
   return Math.round(Math.exp(OLS_A+OLS_B*Math.log((Date.now()/1000-GENESIS_TS)/86400)+med));
 }}
 function fmtP(n) {{ return '$'+Math.round(n).toLocaleString(); }}
+const LIVE_EDGES  = [10, 20, 30, 40, 50, 60, 70, 80, 90, 99, 101];
+const LIVE_LABELS = {live_labels};
+const LIVE_COLS   = ['#1565c0','#039be5','#00acc1','#43a047','#c0ca33','#ffb300','#ff6d00','#bf360c','#dd0000','#770000'];
 function fetchPrice() {{
   fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT')
     .then(r=>r.json()).then(d=>{{
@@ -1103,6 +1107,15 @@ function fetchPrice() {{
       schedDraw();
       document.getElementById('s-price').textContent = fmtP(p);
       document.getElementById('s-eqm50').textContent = fmtP(CURRENT_EQM50);
+      // Live risk = percentile of the live price within today's pool (same rule as the TV page)
+      const lp = Math.log(p) - (OLS_A + OLS_B*Math.log((Date.now()/1000-GENESIS_TS)/86400));
+      let below = 0; for (const r of RESIDUALS) if (r <= lp) below++;
+      CURRENT_RISK = 100*below/RESIDUALS.length;
+      document.getElementById('s-risk').textContent = CURRENT_RISK.toFixed(1) + '%';
+      const bi = LIVE_EDGES.findIndex(e => CURRENT_RISK <= e);
+      const bEl = document.getElementById('s-band');
+      bEl.textContent = bi >= 0 && bi < LIVE_LABELS.length ? LIVE_LABELS[bi] : 'Extreme';
+      bEl.style.color = LIVE_COLS[Math.max(0, Math.min(9, Math.ceil(CURRENT_RISK/10) - 1))];
       const now = new Date();
       document.getElementById('hdr-upd').textContent =
         now.toLocaleDateString('en-GB',{{day:'numeric',month:'short'}}) + ' · ' +
