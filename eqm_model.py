@@ -1,44 +1,21 @@
 """
 Bitcoin Empirical Quantile Model (EQM) Rainbow
-Reverse-engineered from BTCAnalytica's walk-forward quantile model.
+Reconstruction of @BTCAnalytica's walk-forward EQM (bullmania indicator).
 
-Confirmed architecture (reverse-engineered June 2026):
-───────────────────────────────────────────────────────
-BTCAnalytica publishes three models side by side:
+Algorithm (validated Nov 2026 against ~46,000 band values read from his live
+indicator, 2015-2026: median error 0.04%, 96% of values within 0.5%):
+  Price   : Bitstamp BTC/USD daily closes, history from EQM_START (2011-09-25).
+  For each day t (frozen once computed, never revised):
+    1. mean_t, std_t = mean / std of ALL closes from EQM_START to t (expanding, raw price)
+    2. z_t = (P_t - mean_t) / std_t
+    3. pool = the last EQM_POOL (1230) values of z, including today
+    4. Band[t][q] = mean_t + std_t * quantile_q(pool)        (Hazen quantile)
+  Risk%      = percentile of today's z within the pool
+  Risk asym  = the same percentile evaluated at the daily low (high when above 50%)
+  Centering  = fraction of days (since bands start) with price below EQM_50
 
-  OLS PL      — full-history power law OLS (from ~2010, b≈5.67).
-                  Fair value. Has now exceeded the $124,824 ATH for
-                  the first time during a bear market (1.002× ATH).
-                  Shown here as a dashed reference line.
-
-  PL QR 50%   — global quantile regression at τ=0.50 (all history).
-
-  EQM 50%     — proprietary cycle-adjusted walk-forward model.
-                  THIS is what we replicate below.
-
-EQM algorithm (Model C):
-  For each day t (OLS_START → today, frozen once computed):
-    1.  OLS on data[OLS_START : t]            — expanding window
-    2.  Residuals = data[t-RESID_WINDOW : t] vs this OLS  — rolling
-    3.  Band[t][q] = exp(OLS_t(x_t) + percentile(resid, q*100))
-    Past values NEVER change retroactively.
-  "One parameter updated daily" = rolling window shifts by one day.
-
-Key confirmed properties:
-  • EQM_50 has NEVER exceeded the running ATH — 0 days in full history
-  • OLS full-history has exceeded ATH 755 days (344 bull + 3 bear so far)
-  • 4.6% gap vs BTCAnalytica's exact EQM_50 — likely a proprietary
-    cycle-amplitude weighting we cannot fully reverse-engineer
-
-Calibration vs BTCAnalytica (June 2026, BTC ≈ $60.9K):
-  EQM_50  ≈ $100,200  |  R²        ≈ 0.9151  |  OLS_START: 2018-01-04
-  Risk    ≈ 8.2%      |  Centering ≈ 51.6%   |  RESID_WINDOW: 1252 days
-  EQM/ATH ≈ 0.803     |  ATH       = $124,824 (Oct 6, 2025)
-
-Metric definitions:
-  Risk%      = log-linear interpolation of current price between adjacent bands
-  Centering  = fraction of OLS_START+ days where price < OLS prediction
-  EQM/ATH    = EQM_50 / running all-time high  (BTCAnalytica's key ratio)
+The full-history OLS power law (a_full, b_full) is kept only as a dotted
+reference line on the charts; it plays no part in the EQM bands.
 """
 
 import numpy as np
@@ -75,10 +52,15 @@ _SCRIPT_DIR = _os.path.dirname(_os.path.abspath(__file__))
 DATA_PATH = _os.path.join(_SCRIPT_DIR, "btc_prices.csv")
 OUT_DIR   = _SCRIPT_DIR
 
-# EQM walk-forward parameters (confirmed via reverse-engineering)
-OLS_START    = '2018-01-04'   # post-2017-ATH bear; gives 0 days EQM_50 > ATH
-MIN_OBS      = 100            # minimum observations before computing bands
-RESID_WINDOW = 1252           # rolling residual window ≈ 3.5 years
+# EQM parameters (reconstructed from his live indicator, Nov 2026)
+EQM_START    = '2011-09-25'   # start of the price history the indicator uses (Bitstamp)
+EQM_POOL     = 1230           # number of past standardized prices in the quantile pool
+BITSTAMP_START = '2011-08-18' # first Bitstamp daily candle (rows before this are other sources)
+
+# Legacy names kept for chart labels / backwards compatibility
+OLS_START    = EQM_START
+RESID_WINDOW = EQM_POOL
+MIN_OBS      = EQM_POOL
 
 # Full-history OLS start (matches BTCAnalytica's "OLS PL" reference line)
 OLS_FULL_START = None         # None = use all available data
@@ -115,62 +97,62 @@ def load_data():
     return df
 
 
-# ── Fetch latest prices from Binance ──────────────────────────────────────────
+# ── Fetch latest prices from Bitstamp ─────────────────────────────────────────
 def fetch_latest_prices(df):
-    """Fetch any missing daily closes from Binance and update btc_prices.csv."""
-    import urllib.request, json as _json
-    from datetime import datetime as _dt
+    """Fetch completed Bitstamp daily candles newer than the CSV (or missing) and save.
 
-    last_date = df['date'].max().date()
-    now_utc   = _dt.utcnow()
-    today_utc = now_utc.date()
+    The EQM is defined on Bitstamp BTC/USD closes, so every row from
+    BITSTAMP_START onwards must be a Bitstamp close.
+    """
+    import urllib.request, json as _json, time as _time
+    from datetime import datetime as _dt, timezone as _tz
 
-    if last_date >= today_utc:
-        print(f"  Prices already up to date ({last_date})")
-        return df
-
-    days_needed = (today_utc - last_date).days + 2
-    limit = min(1000, days_needed)
-    url = (f"https://data-api.binance.vision/api/v3/klines"
-           f"?symbol=BTCUSDT&interval=1d&limit={limit}")
-    print(f"  Fetching up to {limit} days of prices from Binance...")
-
+    last_date = df['date'].max()
+    start = int(pd.Timestamp(last_date - pd.Timedelta(days=3), tz='UTC').timestamp())
+    now = int(_dt.now(_tz.utc).timestamp())
+    rows = []
     try:
-        with urllib.request.urlopen(url, timeout=15) as resp:
-            klines = _json.loads(resp.read())
+        while True:
+            url = (f"https://www.bitstamp.net/api/v2/ohlc/btcusd/"
+                   f"?step=86400&limit=1000&start={start}")
+            req = urllib.request.Request(url, headers={'User-Agent': 'btc-eqm/1.0'})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = _json.loads(resp.read())['data']['ohlc']
+            if not data:
+                break
+            for k in data:
+                ts = int(k['timestamp'])
+                if ts + 86400 > now:            # candle not yet closed
+                    continue
+                rows.append({'date': pd.Timestamp(ts, unit='s').normalize(),
+                             'close': float(k['close'])})
+            last_ts = int(data[-1]['timestamp'])
+            if last_ts + 86400 > now or len(data) < 2:
+                break
+            start = last_ts + 86400
+            _time.sleep(0.3)
     except Exception as e:
-        print(f"  Warning: Binance fetch failed — {e}")
+        print(f"  Warning: Bitstamp fetch failed — {e}")
         return df
 
-    now_ms = int(now_utc.timestamp() * 1000)
-    existing = set(df['date'].dt.date)
-    new_rows = []
-    for k in klines:
-        close_ms = k[6]
-        if close_ms >= now_ms:          # candle not yet closed
-            continue
-        close_price = float(k[4])
-        d = _dt.utcfromtimestamp(close_ms / 1000).date()
-        if d not in existing and close_price > 0:
-            new_rows.append({'date': pd.Timestamp(d), 'close': close_price})
-
-    if not new_rows:
+    if not rows:
         print("  No new completed candles available")
         return df
 
-    df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
-    df = df.sort_values('date').drop_duplicates('date').reset_index(drop=True)
-    df['t'] = df['date'].apply(lambda d: (d.date() - GENESIS).days)
-    df['x'] = np.log(df['t'].astype(float))
-    df['y'] = np.log(df['close'].astype(float))
+    new = pd.DataFrame(rows).drop_duplicates('date')
+    base = df[['date', 'close']].set_index('date')['close']
+    upd = new.set_index('date')['close']
+    merged = upd.combine_first(base).sort_index()
+    added = int((~upd.index.isin(base.index)).sum())
 
-    # Save updated CSV
-    df[['date', 'close']].assign(
-        date=df['date'].dt.strftime('%Y-%m-%d')
-    ).to_csv(DATA_PATH, index=False)
-    print(f"  Added {len(new_rows)} rows → data now through {df['date'].max().date()}")
+    out = merged.rename('close').reset_index().rename(columns={'index': 'date'})
+    out['t'] = out['date'].apply(lambda d: (d.date() - GENESIS).days)
+    out['x'] = np.log(out['t'].astype(float))
+    out['y'] = np.log(out['close'].astype(float))
 
-    return df
+    out[['date', 'close']].assign(date=out['date'].dt.strftime('%Y-%m-%d')).to_csv(DATA_PATH, index=False)
+    print(f"  Bitstamp: {added} new day(s) → data now through {out['date'].max().date()}")
+    return out
 
 
 # ── Risk% via log-linear interpolation between band boundaries ────────────────
@@ -212,99 +194,79 @@ def compute_ols_full(df):
     return float(c[1]), float(c[0])   # (a, b)
 
 
-# ── Model C: walk-forward OLS (2018+) + rolling residuals ────────────────────
-def compute_model_c(df, ols_start=OLS_START, min_obs=MIN_OBS,
-                    resid_window=RESID_WINDOW):
+# ── EQM: expanding standardization + rolling quantile pool ───────────────────
+def compute_model_c(df, eqm_start=EQM_START, pool_n=EQM_POOL, **_ignored):
     """
-    Primary EQM model — confirmed architecture of BTCAnalytica's EQM.
-
-    Walk-forward over data from ols_start:
-      • Each day t: OLS on [ols_start → t]  (expanding)
-      • Residuals on [t-resid_window → t]   (rolling 1252 days)
-      • Bands frozen at t; never retroactively changed
+    Walk-forward EQM (reconstruction of @BTCAnalytica's indicator).
 
     Returns
     -------
-    hist_bands : DataFrame  (index=dates, columns=QNAMES)
-                 Walk-forward band values — each row frozen on that date.
-    current    : dict
-                 Today's OLS, bands, risk%, centering, EQM/ATH, etc.
+    hist_bands : DataFrame (index=dates, columns=QNAMES+RAIL_NAMES), each row frozen on its date
+    current    : dict of today's values (bands, risk, centering, ATH metrics, OLS reference)
     """
-    sub = df[df['date'] >= ols_start].reset_index(drop=True)
-    xs  = sub['x'].values
-    ys  = sub['y'].values
+    sub = df[df['date'] >= eqm_start].reset_index(drop=True)
+    p   = sub['close'].astype(float)
+    mu  = p.expanding(2).mean().values
+    sd  = p.expanding(2).std().values
+    z   = (p.values - mu) / sd
     n   = len(sub)
 
     all_qs    = QUANTILES + RAIL_QUANTILES
     all_names = QNAMES + RAIL_NAMES
     hist = {name: np.full(n, np.nan) for name in all_names}
+    risk_hist = np.full(n, np.nan)
 
-    print(f"  Walk-forward: {n} days from {ols_start} "
-          f"(rolling residual window = {resid_window}d)...")
-
-    for i in range(n):
-        if i < min_obs - 1:
+    print(f"  Walk-forward EQM: {n} days from {eqm_start} (pool = {pool_n} standardized prices)...")
+    for i in range(pool_n - 1, n):
+        pool = z[i - pool_n + 1: i + 1]
+        if not np.all(np.isfinite(pool)):
             continue
-        c        = np.polyfit(xs[:i + 1], ys[:i + 1], 1)
-        b_t, a_t = c
-        ws    = max(0, i + 1 - resid_window)
-        resid = ys[ws:i + 1] - (a_t + b_t * xs[ws:i + 1])
-        for q, name in zip(all_qs, all_names):
-            hist[name][i] = np.exp(a_t + b_t * xs[i] + np.percentile(resid, q * 100))
+        qv = np.quantile(pool, all_qs, method='hazen')
+        for name, v in zip(all_names, qv):
+            hist[name][i] = mu[i] + sd[i] * v
+        risk_hist[i] = 100.0 * np.searchsorted(np.sort(pool), z[i], side='right') / pool_n
 
     hist_bands = pd.DataFrame(hist, index=sub['date'])
+    hist_bands['RISK'] = risk_hist
 
     # ── Current state ────────────────────────────────────────────────────────
-    c_now        = np.polyfit(xs, ys, 1)
-    b_now, a_now = c_now
+    pool_now = np.sort(z[-pool_n:])
+    mu_now, sd_now = float(mu[-1]), float(sd[-1])
+    current_bands = {name: float(hist[name][-1]) for name in all_names}
+    current_price = float(p.values[-1])
+    risk_pct = float(risk_hist[-1])
 
-    resid_rolling = ys[-resid_window:] - (a_now + b_now * xs[-resid_window:])
-    q_offsets     = {q: float(np.percentile(resid_rolling, q * 100))
-                     for q in QUANTILES + RAIL_QUANTILES}
+    # live-page helpers: pool mapped to today's price level (log), so the page's
+    # "share of RESIDUALS below log(price)" equals the EQM percentile exactly
+    pool_prices = mu_now + sd_now * pool_now
+    resid_live = np.log(np.clip(pool_prices, 1e-9, None))
 
-    resid_ols = ys - (a_now + b_now * xs)
-    centering = float(np.mean(resid_ols < 0) * 100)
+    # centering / walk-forward fit of the 50% line (log price vs same-day EQM_50)
+    ok  = ~np.isnan(hist['EQM_50'])
+    lp  = np.log(p.values[ok]); l50 = np.log(hist['EQM_50'][ok])
+    centering = float(np.mean(lp < l50) * 100)
+    r2 = float(1 - np.sum((lp - l50) ** 2) / np.sum((lp - lp.mean()) ** 2))
 
-    resid_full = df['y'].values - (a_now + b_now * df['x'].values)
-    r2 = 1 - np.sum(resid_full ** 2) / np.sum((df['y'].values - df['y'].values.mean()) ** 2)
-
-    t_now         = (pd.Timestamp(df['date'].values[-1]).date() - GENESIS).days
-    x_now         = np.log(t_now)
-    current_bands = {name: np.exp(a_now + b_now * x_now + q_offsets[q])
-                     for q, name in zip(QUANTILES + RAIL_QUANTILES,
-                                        QNAMES + RAIL_NAMES)}
-
-    current_price = float(df['close'].values[-1])
-    risk_pct      = compute_risk_pct(current_price, current_bands)
-
-    # ATH tracking
     ath_price = float(df['close'].max())
     ath_date  = df.loc[df['close'].idxmax(), 'date'].date()
-    eqm_ath   = current_bands['EQM_50'] / ath_price   # BTCAnalytica's key ratio
-    drawdown  = (current_price / ath_price - 1) * 100  # negative = below ATH
+    eqm_ath   = current_bands['EQM_50'] / ath_price
+    drawdown  = (current_price / ath_price - 1) * 100
 
-    # Full-history OLS reference (BTCAnalytica's OLS PL panel)
     a_full, b_full = compute_ols_full(df)
-    ols_full_now   = np.exp(a_full + b_full * x_now)
-    ols_full_ath_ratio = ols_full_now / ath_price
+    t_now = (pd.Timestamp(df['date'].values[-1]).date() - GENESIS).days
+    x_now = np.log(t_now)
+    ols_full_now = np.exp(a_full + b_full * x_now)
 
     current = dict(
-        a=a_now, b=b_now, r2=r2,
-        q_offsets=q_offsets,
-        current_bands=current_bands,
-        n_resid=len(resid_rolling),
-        risk_pct=risk_pct,
-        centering=centering,
-        resid_window=resid_window,
-        # ATH metrics
-        ath_price=ath_price,
-        ath_date=ath_date,
-        eqm_ath=eqm_ath,
-        drawdown_pct=drawdown,
-        # Full-history OLS reference
-        a_full=a_full, b_full=b_full,
-        ols_full_now=ols_full_now,
-        ols_full_ath_ratio=ols_full_ath_ratio,
+        # a = b = 0 so legacy code computing exp(a + b*x + q_offset) returns the band
+        a=0.0, b=0.0,
+        q_offsets={q: float(np.log(current_bands[nm])) for q, nm in zip(all_qs, all_names)},
+        r2=r2, current_bands=current_bands, n_resid=pool_n, resid_window=pool_n,
+        risk_pct=risk_pct, centering=centering,
+        mu=mu_now, sd=sd_now, resid_live=resid_live,
+        ath_price=ath_price, ath_date=ath_date, eqm_ath=eqm_ath, drawdown_pct=drawdown,
+        a_full=a_full, b_full=b_full, ols_full_now=ols_full_now,
+        ols_full_ath_ratio=ols_full_now / ath_price,
     )
     return hist_bands, current
 
@@ -369,7 +331,7 @@ def generate_png(df, hist_bands, current_c, out_path):
 
     # Stats box
     info = (
-        f"OLS: {OLS_START}  |  Resid: {current_c['resid_window']}d  |  "
+        f"EQM: expanding std from {EQM_START}  |  Pool: {current_c['resid_window']}d  |  "
         f"R²={current_c['r2']:.4f}  |  Risk={current_c['risk_pct']:.1f}%  |  "
         f"Centering={current_c['centering']:.1f}%  |  "
         f"EQM₅₀/ATH={current_c['eqm_ath']:.3f}  |  "
@@ -507,7 +469,7 @@ def generate_html(df, hist_bands, current_c, out_path):
         annotations=[
             dict(
                 text=(
-                    f"EQM: OLS {OLS_START} | Resid {current_c['resid_window']}d rolling | "
+                    f"EQM: expanding std from {EQM_START} | Pool {current_c['resid_window']}d | "
                     f"R²={current_c['r2']:.4f} | Risk={current_c['risk_pct']:.1f}% | "
                     f"Centering={current_c['centering']:.1f}% | "
                     f"EQM₅₀/ATH={eqm_ath:.3f} | Drawdown={dd:.1f}% | "
@@ -591,18 +553,17 @@ def generate_stats(df, current_c, out_path):
         f'Drawdown  : {current_c["drawdown_pct"]:.1f}% from ATH',
         '',
         '=' * 64,
-        '  EQM Model (walk-forward OLS 2018 + rolling 1252d residuals)',
+        f'  EQM (expanding standardization from {EQM_START} + {EQM_POOL}-day quantile pool)',
         '=' * 64,
-        f'  OLS (EQM base): log(P) = {a:.4f} + {b:.4f} × log(t)',
-        f'  R²  (all data): {current_c["r2"]:.6f}',
+        f'  Mean / std of all closes since {EQM_START}: ${current_c["mu"]:,.0f} / ${current_c["sd"]:,.0f}',
+        f'  Walk-fwd R² (log price vs same-day EQM_50): {current_c["r2"]:.4f}',
         f'  Risk (current): {current_c["risk_pct"]:.1f}%  '
         f'→ {band_label(current_c["risk_pct"])}',
         f'  Centering     : {current_c["centering"]:.2f}%  '
-        f'(fraction of 2018+ days below OLS)',
+        f'(fraction of days with price below EQM_50)',
         f'  EQM₅₀ / ATH  : {current_c["eqm_ath"]:.4f}  '
-        f'(BTCAnalytica key ratio; target ≈ 0.720 at Mar 2026)',
-        f'  Residual n    : {current_c["n_resid"]}  '
-        f'(rolling {current_c["resid_window"]}d window)',
+        f'(EQM_50 / all-time high)',
+        f'  Pool size     : {current_c["n_resid"]} standardized prices',
         '',
         '  EQM bands today:',
         f'  {"Zone":<12} {"Name":>8}  {"Price":>10}',
@@ -732,10 +693,7 @@ def generate_tv_html(df, hist_bands, current_c, tv_path):
     html = _replace_js_var(html, 'OLS_B', repr(round(float(current_c['b']), 8)))
 
     # ── RESIDUALS (rolling window — for live risk computation) ────────────────
-    sub  = df[df['date'] >= OLS_START].reset_index(drop=True)
-    xs   = sub['x'].values
-    ys   = sub['y'].values
-    resid_rolling = ys[-RESID_WINDOW:] - (current_c['a'] + current_c['b'] * xs[-RESID_WINDOW:])
+    resid_rolling = current_c['resid_live']
     html = _replace_js_var(html, 'RESIDUALS',
                            _json.dumps([round(float(r), 6) for r in resid_rolling]))
 
@@ -782,10 +740,7 @@ def generate_mobile_html(df, hist_bands, current_c, mobile_path):
         for _, row in df.iterrows()
     ]
 
-    sub = df[df['date'] >= OLS_START].reset_index(drop=True)
-    xs  = sub['x'].values
-    ys  = sub['y'].values
-    resid_rolling = ys[-RESID_WINDOW:] - (current_c['a'] + current_c['b'] * xs[-RESID_WINDOW:])
+    resid_rolling = current_c['resid_live']
     residuals_json = _json.dumps([round(float(r), 6) for r in resid_rolling])
 
     cur_price = round(float(df['close'].values[-1]))
@@ -1189,9 +1144,9 @@ if __name__ == '__main__':
     print(f"  Current price : ${df['close'].values[-1]:,.0f}")
     print(f"  ATH           : ${df['close'].max():,.0f}")
 
-    print(f"\nFitting EQM (walk-forward OLS {OLS_START} + rolling {RESID_WINDOW}d)...")
+    print(f"\nComputing EQM (expanding standardization from {EQM_START}, pool {EQM_POOL})...")
     hist_bands, current_c = compute_model_c(df)
-    print(f"  OLS (EQM): a={current_c['a']:.4f}, b={current_c['b']:.4f}")
+    print(f"  EQM: mean={current_c['mu']:,.0f}  std={current_c['sd']:,.0f}  50%=${current_c['current_bands']['EQM_50']:,.0f}")
     print(f"  OLS (PL) : a={current_c['a_full']:.4f}, b={current_c['b_full']:.4f}")
     print(f"  R²={current_c['r2']:.6f}  Risk={current_c['risk_pct']:.1f}%  "
           f"Centering={current_c['centering']:.1f}%")
